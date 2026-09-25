@@ -1,8 +1,14 @@
 name: Freemchost Auto Renew Permanent
 
 on:
-  schedule:
-    - cron: '10 */6 * * *'
+  # ⏸️ 2026-09-25 暫停排程（原本每 6 小時 '10 */6 * * *'，實測每日 4 單全紅）。
+  #    原因：repo 缺 secret SERVER_PAGE_URL（帳號/密碼 FREE_EMAIL、FREE_PASSWORD 已有），
+  #    renew.js 讀唔到就即刻 abort：「❌ 缺失账号、密码或有效的 SERVER_PAGE_URL 地址！」
+  #    （run 36061614549 / 36096021344）。呢個值係用戶自己嘅伺服器頁 URL，
+  #    例：https://new.freemchost.com/server/xxxxxx —— 冇得由代碼推斷，要人手填。
+  #    補返 secret 之後：解除下面註釋即可恢復自動續期。
+  # schedule:
+  #   - cron: '10 */6 * * *'
   workflow_dispatch:
 
 permissions:
