@@ -24,10 +24,10 @@ jobs:
 
     steps:
       - name: 拉取代码
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: 安装 Node.js 环境
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -206,7 +206,7 @@ jobs:
 
       - name: 上传运行截图
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: Freemchost-Screenshots-${{ github.run_number }}
           path: screenshots/*.png
