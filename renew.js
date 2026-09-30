@@ -5,6 +5,72 @@ if (!fs.existsSync('screenshots')) {
   fs.mkdirSync('screenshots');
 }
 
+// 🕗 統一時間顯示（GitHub runner 係 UTC，呢度一律出 UTC+8 嘅 MM-DD HH:MM）
+//    offsetHours 可傳「剩餘小時數」以算出到期時間
+function nowLocal(offsetHours = 0) {
+  const t = new Date(Date.now() + (8 + offsetHours) * 3600 * 1000);
+  const p = n => String(n).padStart(2, '0');
+  return `${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())} ${p(t.getUTCHours())}:${p(t.getUTCMinutes())}`;
+}
+
+// ⏱️ 剩餘小時 → 短標籤「X天Y小时」
+function fmtRemain(totalHours) {
+  if (!Number.isFinite(totalHours)) return '未知';
+  const d = Math.floor(totalHours / 24);
+  const h = Math.floor(totalHours % 24);
+  return d > 0 ? `${d}天${h}小时` : `${h}小时`;
+}
+
+// 🧼 動態欄位 HTML 逃逸（parse_mode 保持 HTML，<>&" 一定要走一次）
+function escHtml(value) {
+  return String(value === undefined || value === null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// 🧱 每項通知行（表頭以外嘅一行）：伺服器編號 + 短狀態 + 重點
+function itemRenewed(sIndex, totalHours) {
+  return { name: `服务器 ${sIndex}`, status: 'ok', label: '✅ 已续期 +60h', detail: `到期 ${nowLocal(totalHours)}` };
+}
+function itemNotDue(sIndex, timeData) {
+  return {
+    name: `服务器 ${sIndex}`,
+    status: 'skip',
+    label: timeData ? `⏭️ 未可续（剩 ${fmtRemain(timeData.totalHours)}）` : '⏭️ 未可续（未读取到剩余时长）',
+    detail: timeData ? `到期 ${nowLocal(timeData.totalHours)}` : ''
+  };
+}
+function itemNotCredited(sIndex, currentStr) {
+  return { name: `服务器 ${sIndex}`, status: 'fail', label: '❌ 续期未入账', detail: `当前 ${currentStr}` };
+}
+function itemFailed(name, message, label = '❌ 巡检失败') {
+  return { name: name, status: 'fail', label: label, detail: String(message).substring(0, 60) };
+}
+
+// 🧾 瘦身通知：表頭一行（統計）＋每項一行；只有出現 ❌ 才補一行提示
+function buildReport(serviceName, items) {
+  const tally = { ok: 0, skip: 0, fail: 0 };
+  items.forEach(it => {
+    tally[it.status === 'ok' ? 'ok' : it.status === 'skip' ? 'skip' : 'fail'] += 1;
+  });
+
+  const lines = [
+    `🎮 ${escHtml(serviceName)} ｜ ${nowLocal()} ｜ ✅ ${tally.ok} ｜ ⏭️ ${tally.skip} ｜ ❌ ${tally.fail}`
+  ];
+
+  items.forEach(it => {
+    const row = [it.name, it.label, it.detail]
+      .filter(v => v !== undefined && v !== null && v !== '')
+      .map(escHtml);
+    lines.push(`▪️ ${row.join(' · ')}`);
+  });
+
+  if (tally.fail > 0) lines.push('⚠️ 睇 workflow log 排查');
+  return lines.join('\n');
+}
+
 // Telegram 通知工具
 async function sendTelegramMessage(botToken, chatId, text) {
   if (!botToken || !chatId) {
@@ -415,32 +481,32 @@ async function safeScreenshot(page, filePath) {
           // 只有真实数据增加了 20 小时以上才算入库
           if (finalHours > remainHours + 20) {
             console.log('🎉 验证通过：后端数据库已落盘！');
-            reports.push(`🟢 <b>服务器 ${sIndex}</b>: 成功满血续期 (+60h)\n     └ 状态: ${remainStr} ➔ <b>${finalStr}</b>`);
+            reports.push(itemRenewed(sIndex, finalHours));
           } else {
             console.error('❌ 验证失败：后端数据未真正更新！');
-            reports.push(`🔴 <b>服务器 ${sIndex}</b>: 续期指令下发但后端未入账 (当前: ${finalStr})\n     └ 机制: 下个 12h 周期将自动重试`);
+            reports.push(itemNotCredited(sIndex, finalStr));
           }
 
         } else {
           console.log(`⏳ 服务器 [${sIndex}] 距离 46h 开放还差约 ${(remainHours - 46).toFixed(1)} 小时，保持等待。`);
-          reports.push(`⚪ <b>服务器 ${sIndex}</b>: 剩余 ${remainStr} (未达 46h)`);
+          reports.push(itemNotDue(sIndex, timeData));
         }
 
       } catch (innerErr) {
         console.error(`❌ 服务器 [${sIndex}] 处理异常:`, innerErr.message);
-        reports.push(`🔴 <b>服务器 ${sIndex}</b>: 巡检失败 (${innerErr.message.substring(0, 30)})`);
+        reports.push(itemFailed(`服务器 ${sIndex}`, innerErr.message));
         await safeScreenshot(page, `screenshots/error-server-${sIndex}.png`);
       }
     }
 
     // 汇总推送 Telegram 报告
-    const summaryMsg = `🤖 <b>FreeMCHost 巡检报告</b>\n\n${reports.join('\n')}\n\n<b>检查周期:</b> 每 12 小时自动巡检\n<b>规则:</b> 触发低于 46h 门槛时自动加满 60h\n<b>时间:</b> ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+    const summaryMsg = buildReport('FreeMCHost', reports);
     await sendTelegramMessage(tgToken, tgChatId, summaryMsg);
 
   } catch (error) {
     console.error('❌ 全局致命错误:', error.message);
     await safeScreenshot(page, 'screenshots/renew_fatal.png');
-    await sendTelegramMessage(tgToken, tgChatId, `🚨 <b>Freemchost 运行崩溃:</b> <code>${error.message}</code>`);
+    await sendTelegramMessage(tgToken, tgChatId, buildReport('FreeMCHost', [itemFailed('运行异常', error.message, '❌ 崩溃')]));
     process.exitCode = 1;
   } finally {
     await browser.close();
